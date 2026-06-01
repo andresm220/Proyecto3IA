@@ -1,0 +1,16 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.pytest_cache/
+
+# Herramientas de desarrollo
+.claude/
+.superpowers/
+docs/
+
+# Entornos virtuales
+venv/
+.venv/
+env/
