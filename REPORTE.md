@@ -381,3 +381,111 @@ python analysis/plots.py
 3. **MCTS necesita más tiempo o mejores rollouts** para ser competitivo en Othello. Con rollouts aleatorios y solo 2 segundos, las simulaciones son insuficientes. Una mejora sería usar rollouts guiados por la heurística.
 
 4. **Expectimax** es útil cuando el oponente es un humano o agente subóptimo — modela la incertidumbre en lugar de asumir juego perfecto del oponente.
+
+---
+
+## 13. Preguntas frecuentes (defensa)
+
+---
+
+### ¿Qué es una heurística y por qué es necesaria?
+
+En juegos como Othello el árbol de juego tiene ~10^28 nodos posibles — es imposible llegar siempre al final. La heurística es una **función que estima qué tan buena es una posición sin llegar al estado terminal**. Le da al agente una "intuición" del valor de un tablero. Sin heurística, el agente solo podría jugar si resuelve el juego completo (inviable en tiempo real).
+
+---
+
+### ¿Por qué usas Alpha-Beta en lugar de Minimax puro?
+
+Minimax explora **todos** los nodos del árbol. Alpha-Beta **poda** ramas que nunca podrán influir en la decisión final: si ya encontré un camino con valor X para el MAX, y el oponente tiene una jugada que lleva a algo ≤ X, ese sub-árbol se descarta. En la práctica reduce el espacio de búsqueda de O(b^d) a O(b^(d/2)) en el mejor caso — con el mismo tiempo se llega al **doble de profundidad**.
+
+En los datos del proyecto: a profundidad 5, Minimax visita 1,713 nodos y Alpha-Beta solo 482 (**72% menos**).
+
+---
+
+### ¿Qué es el iterative deepening y por qué lo usas?
+
+En lugar de buscar directamente a profundidad fija N, el agente busca primero a profundidad 1, luego 2, luego 3... hasta que se acaba el tiempo. Así siempre tiene una respuesta (la de la última profundidad completa) y nunca excede el límite de 2 segundos. El costo de repetir las búsquedas anteriores es pequeño comparado con la profundidad final.
+
+---
+
+### ¿Qué es el factor de ramificación efectivo (b_eff)?
+
+`b_eff = nodos_totales ^ (1 / profundidad)`
+
+Mide cuántos hijos "efectivos" tiene cada nodo en promedio. En Othello sin poda, b_eff ≈ 4.4. Con Alpha-Beta baja a ≈ 3.4. Esto significa que Alpha-Beta se comporta como si el árbol tuviera un factor de ramificación ~23% menor — por eso llega más profundo con el mismo tiempo.
+
+---
+
+### ¿Qué es Expectimax y cuándo conviene usarlo?
+
+Expectimax reemplaza los **nodos MIN** (oponente perfectamente racional) por **nodos de azar** (promedio de los valores de todos sus hijos). Modelamos al oponente como si eligiera movimientos de forma uniforme aleatoria. Conviene cuando el oponente es **humano o subóptimo** — Minimax sobreestima la amenaza del rival asumiendo que siempre jugará perfecto, lo que puede llevar a decisiones excesivamente conservadoras.
+
+---
+
+### ¿Por qué MCTS perdió los 20 juegos contra Alpha-Beta?
+
+MCTS con 2 segundos alcanza solo ~13 simulaciones completas desde la posición inicial de Othello. Cada simulación es un rollout aleatorio de ~60 movimientos — con tan pocas muestras la estimación estadística es muy ruidosa. Alpha-Beta con buenas heurísticas y profundidad 5-6 tiene una visión determinista mucho más precisa del árbol. Para ser competitivo, MCTS necesitaría cientos de simulaciones (más tiempo) o rollouts guiados por heurística en lugar de aleatorios.
+
+---
+
+### ¿Por qué las esquinas son tan importantes en Othello?
+
+Las esquinas **nunca pueden ser volteadas** — una vez capturadas son permanentes. Además anclan los bordes: una fila completa desde la esquina también se vuelve estable. Por eso tienen peso 120 en la matriz posicional (el mayor), y las X-squares (diagonales a las esquinas) tienen -40 porque cederlas regala la esquina al oponente.
+
+---
+
+### ¿Por qué los pesos de la heurística cambian según la fase?
+
+- **Apertura:** pocas fichas, el tablero está abierto. Lo que importa es tener **movilidad** (más opciones) y no caer en X/C-squares. La paridad (cantidad de fichas) no importa — tener pocas fichas en apertura es bueno porque son más difíciles de voltear.
+- **Juego medio:** se balancean movilidad, estabilidad y control de esquinas.
+- **Cierre:** el árbol es pequeño, casi todo es resoluble. Lo que determina el ganador es la **cantidad de fichas**, así que paridad sube a peso 0.50.
+
+---
+
+### ¿Qué es la estabilidad en Othello?
+
+Una ficha es **estable** si ya no puede ser volteada en ninguna jugada futura. Las esquinas son siempre estables; los bordes anclados a esquinas también. La heurística premia tener fichas estables y penaliza las "frontera" (expuestas a volteo). Es uno de los componentes más importantes en juego medio y cierre.
+
+---
+
+### ¿Cómo garantizan que la IA no supere los 2 segundos?
+
+Todos los agentes calculan un `deadline = inicio + 2.0 - 0.1` (margen de 100ms). En Alpha-Beta y Expectimax, cada nodo verifica `perf_counter() >= deadline` y lanza una excepción `_TimeOut` que aborta la búsqueda, devolviendo la mejor jugada de la iteración anterior. En MCTS, el bucle principal es `while perf_counter() - start < 1.9`. Siempre se devuelve una jugada válida.
+
+---
+
+### ¿Por qué separar la lógica del juego de la GUI?
+
+Es un requisito explícito del enunciado y buena práctica de software. Permite:
+1. **Testear** el motor de juego sin necesitar pantalla (`pytest` corre sin Pygame)
+2. **Reutilizar** los agentes en análisis headless (torneo, combinatoria)
+3. **Mantener** cada capa independientemente sin que un cambio en la GUI rompa la lógica
+
+La GUI solo llama a `engine.get_legal_moves()`, `engine.apply_move()` y `agent.get_move()` — no conoce nada del interior de los algoritmos.
+
+---
+
+### ¿Cómo funciona el modo IA vs IA sin bloquearse?
+
+La IA corre en un **hilo separado** (`threading.Thread`). Mientras el agente piensa, el event loop de Pygame sigue procesando eventos (como cerrar la ventana con ESC). Cuando el hilo termina, guarda el movimiento en `self._ai_move`. El loop principal lo detecta, lo aplica al tablero y lanza el siguiente hilo para el otro agente.
+
+---
+
+### ¿Qué pasa si un jugador no tiene movimientos legales?
+
+`apply_move()` maneja el pase automáticamente: después de aplicar un movimiento, verifica si el rival tiene movimientos. Si no los tiene, **vuelve a asignar el turno al jugador actual** en lugar de pasarlo. Si ninguno tiene movimientos, `is_terminal()` retorna `True` y el juego termina. Esto cumple exactamente las reglas de Othello: el pase no es voluntario, y si ambos están bloqueados, se acaba.
+
+---
+
+### ¿Por qué el MCTS usa C = 1.41 (≈ √2)?
+
+El término de exploración en UCT es `C × √(ln(N) / n)`. Con C = √2 se demuestra teóricamente que el algoritmo converge al óptimo minimizando el arrepentimiento (regret) en el problema del bandido multibrazo. En la práctica es un buen punto de partida — valores más altos exploran más (útil con poco tiempo), valores más bajos explotan más (útil con muchas simulaciones).
+
+---
+
+### ¿Qué entregarías diferente si tuvieras más tiempo?
+
+1. **Tabla de transposición** en Alpha-Beta con Zobrist hash — evita recalcular posiciones repetidas
+2. **Rollouts guiados** en MCTS usando la heurística para sesgar el rollout hacia jugadas más prometedoras
+3. **RAVE / MCTS-GRAVE** para acelerar la convergencia del árbol MCTS
+4. **Ventanas de aspiración** en Alpha-Beta para acelerar la búsqueda en iteraciones profundas
